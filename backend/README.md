@@ -19,8 +19,8 @@ Send JSON with `Content-Type: application/json`. After signup or login, save the
 
 | Method | Route | JSON body / behavior |
 | --- | --- | --- |
-| POST | `/api/users/` | `{"name":"Jo", "email":"jo@example.edu", "password":"password123"}`; returns user and token |
-| POST | `/api/login/` | `{"email":"jo@example.edu", "password":"password123"}`; returns user and token |
+| POST | `/api/users/` | `{"username":"jo", "password":"password123"}`; returns user and token |
+| POST | `/api/login/` | `{"username":"jo", "password":"password123"}`; returns user and token |
 | POST | `/api/logout/` | Invalidates the current token |
 | GET | `/api/me/` | Current profile and coin balance |
 | POST | `/api/focus-sessions/` | `{"duration_minutes":30}`; starts a session, 1–180 minutes |
@@ -37,7 +37,7 @@ Errors are JSON objects with an `error` field. A user can have one active or pau
 
 - The picture shows 30 coins for a 30-minute session, so this prototype awards one coin per completed minute.
 - The leaderboard currently includes all users, not just friends. Weeks run Monday–Sunday in UTC, and sessions count on their completion day.
-- School email/password signup is a prototype. NetID login and school email verification need the school's identity provider and agreed authentication flow. Passwords are hashed; tokens do not expire and a new login invalidates the previous token. Production use needs a reviewed authentication and deployment design.
+- Accounts use a username and password; no school email or NetID is required. Passwords are hashed; tokens do not expire and a new login invalidates the previous token. Production use needs a reviewed authentication and deployment design.
 - Blocking other apps and requesting device permissions are handled by the mobile app and operating system, not these routes.
 - A paused session can be resumed or cancelled. Rewards are granted only when the client requests completion after the server timer reaches zero.
 
@@ -51,7 +51,7 @@ User 1 ───── 0 or 1 UserSettings
 User 1 ───── many BlockedApp
 ```
 
-- **User** stores the account name, normalized email, password hash, token hash, and coin balance. Passwords and tokens are not returned in profiles.
+- **User** stores the account name, normalized username, password hash, token hash, and coin balance. Passwords and tokens are not returned in profiles.
 - **FocusSession** belongs to one user and records the intended duration, elapsed time, running/paused/completed/cancelled state, completion time, and earned coins. The server computes remaining time from timestamps. Completed sessions supply the leaderboard and weekly chart.
 - **UserSettings** belongs to one user and stores the default timer length and deep-focus preference. Defaults are created on first access.
 - **BlockedApp** belongs to one user and stores an app identifier. A user cannot have the same identifier twice. These records are preferences for the mobile client; they do not block an app by themselves.
@@ -72,4 +72,6 @@ Additional routes for the screens:
 
 The identifiers in `blocked_apps` must be agreed with the Kotlin developer and are platform-specific. Settings do not prove a device has granted permissions or that blocking is active. Deep focus is saved as a preference; its exact device behavior needs agreement with the team.
 
-NetID single sign-on, school email verification, and a friends-only leaderboard cannot be completed from the drawing alone: they need the identity provider and product rules. The existing email/password login and global leaderboard are prototypes. This is a development backend, not a production-ready authentication or deployment system.
+The global leaderboard is a prototype; a friends-only leaderboard would need agreed product rules. Username/password login is available to anyone. This is a development backend, not a production-ready authentication or deployment system.
+
+For compatibility with the first prototype database, the username is stored in the existing database column named `email`. Existing accounts can log in using their former email as their username; new accounts do not need an email address.
