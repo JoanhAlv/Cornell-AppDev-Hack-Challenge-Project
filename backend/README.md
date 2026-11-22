@@ -40,3 +40,36 @@ Errors are JSON objects with an `error` field. A user can have one active or pau
 - School email/password signup is a prototype. NetID login and school email verification need the school's identity provider and agreed authentication flow. Passwords are hashed; tokens do not expire and a new login invalidates the previous token. Production use needs a reviewed authentication and deployment design.
 - Blocking other apps and requesting device permissions are handled by the mobile app and operating system, not these routes.
 - A paused session can be resumed or cancelled. Rewards are granted only when the client requests completion after the server timer reaches zero.
+
+## Database design
+
+The database uses four tables. Primary keys identify each record; foreign keys connect data to its owner:
+
+```text
+User 1 ───── many FocusSession
+User 1 ───── 0 or 1 UserSettings
+User 1 ───── many BlockedApp
+```
+
+- **User** stores the account name, normalized email, password hash, token hash, and coin balance. Passwords and tokens are not returned in profiles.
+- **FocusSession** belongs to one user and records the intended duration, elapsed time, running/paused/completed/cancelled state, completion time, and earned coins. The server computes remaining time from timestamps. Completed sessions supply the leaderboard and weekly chart.
+- **UserSettings** belongs to one user and stores the default timer length and deep-focus preference. Defaults are created on first access.
+- **BlockedApp** belongs to one user and stores an app identifier. A user cannot have the same identifier twice. These records are preferences for the mobile client; they do not block an app by themselves.
+
+SQLAlchemy relationships in `db.py` connect the models in both directions. Deleting a user through SQLAlchemy also deletes their related records. `db.create_all()` creates missing tables but is not a migration system: future changes to existing columns will need a database migration.
+
+## API design
+
+Routes represent accounts, the signed-in user's settings, focus sessions, and the weekly leaderboard. The server authenticates requests using a bearer token and checks that a session belongs to the requesting user. The client controls the display and device-specific permissions, while the server tracks session time, calculates rewards, and aggregates completed sessions. Responses are JSON with HTTP status codes; errors contain an `error` message.
+
+Additional routes for the screens:
+
+| Method | Route | JSON body / behavior |
+| --- | --- | --- |
+| GET | `/api/settings/` | Returns `default_duration_minutes`, `deep_focus`, and `blocked_apps` |
+| PUT | `/api/settings/` | Update any of those fields, e.g. `{"deep_focus":true,"blocked_apps":["com.example.app"]}`. The app list replaces the previous list. |
+| GET | `/api/focus-sessions/` | Returns the user's sessions, newest first, including active and paused sessions for restoring the timer |
+
+The identifiers in `blocked_apps` must be agreed with the Kotlin developer and are platform-specific. Settings do not prove a device has granted permissions or that blocking is active. Deep focus is saved as a preference; its exact device behavior needs agreement with the team.
+
+NetID single sign-on, school email verification, and a friends-only leaderboard cannot be completed from the drawing alone: they need the identity provider and product rules. The existing email/password login and global leaderboard are prototypes. This is a development backend, not a production-ready authentication or deployment system.
