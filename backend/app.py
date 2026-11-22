@@ -1,0 +1,186 @@
+import hashlib
+import os
+import secrets
+from datetime import datetime, timedelta
+from functools import wraps
+
+from flask import Flask, jsonify, request
+from werkzeug.security import check_password_hash, generate_password_hash
+from db import db, FocusSession, User
+
+app = Flask(__name__)
+app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL", "sqlite:///touchdown.db")
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+db.init_app(app)
+
+with app.app_context():
+    db.create_all()
+
+
+def now_utc():
+    return datetime.utcnow()
+
+
+def token_hash(token):
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def require_user(route):
+    @wraps(route)
+    def wrapped(*args, **kwargs):
+        header = request.headers.get("Authorization", "")
+        if not header.startswith("Bearer "):
+            return jsonify({"error": "Authentication required"}), 401
+        user = User.query.filter_by(token_hash=token_hash(header[7:])).first()
+        if user is None:
+            return jsonify({"error": "Invalid token"}), 401
+        return route(user, *args, **kwargs)
+    return wrapped
+
+
+def body_json():
+    body = request.get_json(silent=True)
+    return body if isinstance(body, dict) else {}
+
+
+def issue_token(user):
+    token = secrets.token_urlsafe(32)
+    user.token_hash = token_hash(token)
+    db.session.commit()
+    return token
+
+
+# CREATE AN ACCOUNT
+@app.route("/api/users/", methods=["POST"])
+def create_user():
+    body = body_json()
+    name, email, password = body.get("name"), body.get("email"), body.get("password")
+    if not all(isinstance(value, str) and value.strip() for value in (name, email, password)):
+        return jsonify({"error": "Name, email, and password are required"}), 400
+    if len(password) < 8:
+        return jsonify({"error": "Password must be at least 8 characters"}), 400
+    email = email.strip().lower()
+    if len(name.strip()) > 100 or len(email) > 255 or "@" not in email:
+        return jsonify({"error": "Invalid name or email"}), 400
+    if User.query.filter_by(email=email).first():
+        return jsonify({"error": "Email already registered"}), 409
+    user = User(name=name.strip(), email=email, password_hash=generate_password_hash(password))
+    db.session.add(user)
+    db.session.commit()
+    return jsonify({"user": user.serialize(), "token": issue_token(user)}), 201
+
+
+# LOG IN AND LOG OUT
+@app.route("/api/login/", methods=["POST"])
+def login():
+    body = body_json()
+    email, password = body.get("email"), body.get("password")
+    if not isinstance(email, str) or not isinstance(password, str):
+        return jsonify({"error": "Invalid email or password"}), 401
+    user = User.query.filter_by(email=email.strip().lower()).first()
+    if user is None or not check_password_hash(user.password_hash, password):
+        return jsonify({"error": "Invalid email or password"}), 401
+    return jsonify({"user": user.serialize(), "token": issue_token(user)}), 200
+
+
+@app.route("/api/logout/", methods=["POST"])
+@require_user
+def logout(user):
+    user.token_hash = None
+    db.session.commit()
+    return jsonify({"message": "Logged out"}), 200
+
+
+# GET THE CURRENT USER'S PROFILE
+@app.route("/api/me/", methods=["GET"])
+@require_user
+def get_profile(user):
+    return jsonify(user.serialize()), 200
+
+
+# START A FOCUS SESSION
+@app.route("/api/focus-sessions/", methods=["POST"])
+@require_user
+def start_focus(user):
+    duration = body_json().get("duration_minutes")
+    if type(duration) is not int or not 1 <= duration <= 180:
+        return jsonify({"error": "duration_minutes must be an integer from 1 to 180"}), 400
+    if FocusSession.query.filter_by(user_id=user.id).filter(FocusSession.status.in_(["active", "paused"])).first():
+        return jsonify({"error": "Finish or cancel your current session first"}), 409
+    session = FocusSession(user_id=user.id, duration_seconds=duration * 60, started_at=now_utc())
+    db.session.add(session)
+    db.session.commit()
+    return jsonify(session.serialize(now_utc())), 201
+
+
+def find_session(user, session_id):
+    return FocusSession.query.filter_by(id=session_id, user_id=user.id).first()
+
+
+@app.route("/api/focus-sessions/<int:session_id>/", methods=["GET"])
+@require_user
+def get_focus(user, session_id):
+    session = find_session(user, session_id)
+    if session is None:
+        return jsonify({"error": "Session not found"}), 404
+    return jsonify(session.serialize(now_utc())), 200
+
+
+# PAUSE, RESUME, COMPLETE, OR CANCEL A SESSION
+@app.route("/api/focus-sessions/<int:session_id>/<action>/", methods=["POST"])
+@require_user
+def update_focus(user, session_id, action):
+    session = find_session(user, session_id)
+    if session is None:
+        return jsonify({"error": "Session not found"}), 404
+    now = now_utc()
+    if action == "pause" and session.status == "active":
+        session.elapsed_seconds = session.serialize(now)["elapsed_seconds"]
+        session.started_at = None
+        session.status = "paused"
+    elif action == "resume" and session.status == "paused":
+        session.started_at = now
+        session.status = "active"
+    elif action == "complete" and session.status in ("active", "paused"):
+        elapsed = session.serialize(now)["elapsed_seconds"]
+        if elapsed < session.duration_seconds:
+            return jsonify({"error": "Focus session is not finished"}), 400
+        session.elapsed_seconds = elapsed
+        session.started_at = None
+        session.status = "completed"
+        session.completed_at = now
+        session.coins_earned = session.duration_seconds // 60
+        user.coins += session.coins_earned
+    elif action == "cancel" and session.status in ("active", "paused"):
+        session.elapsed_seconds = session.serialize(now)["elapsed_seconds"]
+        session.started_at = None
+        session.status = "cancelled"
+    elif action not in ("pause", "resume", "complete", "cancel"):
+        return jsonify({"error": "Unknown action"}), 404
+    else:
+        return jsonify({"error": "Action is not available for this session"}), 409
+    db.session.commit()
+    return jsonify(session.serialize(now)), 200
+
+
+# WEEKLY LEADERBOARD AND DAILY FOCUS TOTALS (MONDAY THROUGH SUNDAY, UTC)
+@app.route("/api/leaderboard/weekly/", methods=["GET"])
+@require_user
+def weekly_leaderboard(user):
+    now = now_utc()
+    week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+    sessions = FocusSession.query.filter(FocusSession.status == "completed", FocusSession.completed_at >= week_start, FocusSession.completed_at < week_start + timedelta(days=7)).all()
+    totals = {}
+    daily = [0] * 7
+    for session in sessions:
+        totals[session.user_id] = totals.get(session.user_id, 0) + session.duration_seconds
+        if session.user_id == user.id:
+            daily[session.completed_at.weekday()] += session.duration_seconds
+    users = User.query.filter(User.id.in_(list(totals))).all() if totals else []
+    names = {person.id: person.name for person in users}
+    ranking = sorted(totals.items(), key=lambda item: (-item[1], item[0]))
+    return jsonify({"week_start": week_start.date().isoformat(), "timezone": "UTC", "leaderboard": [{"rank": index + 1, "user_id": uid, "name": names[uid], "focus_seconds": seconds} for index, (uid, seconds) in enumerate(ranking)], "daily_focus_seconds": daily}), 200
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8000, debug=True)
