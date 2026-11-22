@@ -6,7 +6,7 @@ from functools import wraps
 
 from flask import Flask, jsonify, request
 from werkzeug.security import check_password_hash, generate_password_hash
-from db import db, FocusSession, User
+from db import db, BlockedApp, FocusSession, User, UserSettings
 
 app = Flask(__name__)
 app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL", "sqlite:///touchdown.db")
@@ -96,6 +96,45 @@ def logout(user):
 @require_user
 def get_profile(user):
     return jsonify(user.serialize()), 200
+
+
+# READ OR UPDATE TIMER AND APP BLOCKING PREFERENCES
+@app.route("/api/settings/", methods=["GET", "PUT"])
+@require_user
+def settings(user):
+    settings = UserSettings.query.filter_by(user_id=user.id).first()
+    if settings is None:
+        settings = UserSettings(user_id=user.id, default_duration_minutes=10, deep_focus=False)
+        db.session.add(settings)
+    if request.method == "PUT":
+        body = body_json()
+        duration = body.get("default_duration_minutes", settings.default_duration_minutes)
+        deep_focus = body.get("deep_focus", settings.deep_focus)
+        apps = body.get("blocked_apps")
+        if type(duration) is not int or not 1 <= duration <= 180:
+            return jsonify({"error": "default_duration_minutes must be an integer from 1 to 180"}), 400
+        if type(deep_focus) is not bool:
+            return jsonify({"error": "deep_focus must be a boolean"}), 400
+        if apps is not None and (not isinstance(apps, list) or any(not isinstance(a, str) or not a.strip() or len(a) > 255 for a in apps)):
+            return jsonify({"error": "blocked_apps must be a list of app identifiers"}), 400
+        settings.default_duration_minutes = duration
+        settings.deep_focus = deep_focus
+        if apps is not None:
+            BlockedApp.query.filter_by(user_id=user.id).delete()
+            for identifier in sorted(set(a.strip() for a in apps)):
+                db.session.add(BlockedApp(user_id=user.id, app_identifier=identifier))
+    db.session.commit()
+    apps = BlockedApp.query.filter_by(user_id=user.id).order_by(BlockedApp.app_identifier).all()
+    return jsonify({"default_duration_minutes": settings.default_duration_minutes, "deep_focus": settings.deep_focus, "blocked_apps": [a.app_identifier for a in apps]}), 200
+
+
+# LIST SESSIONS SO THE CLIENT CAN RESTORE A TIMER OR SHOW HISTORY
+@app.route("/api/focus-sessions/", methods=["GET"])
+@require_user
+def list_focus(user):
+    sessions = FocusSession.query.filter_by(user_id=user.id).order_by(FocusSession.id.desc()).all()
+    now = now_utc()
+    return jsonify({"sessions": [session.serialize(now) for session in sessions]}), 200
 
 
 # START A FOCUS SESSION
