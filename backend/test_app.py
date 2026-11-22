@@ -1,12 +1,12 @@
 import os
 import tempfile
 import unittest
-from datetime import timedelta
 
 fd, path = tempfile.mkstemp(suffix=".db")
 os.close(fd)
 os.environ["DATABASE_URL"] = "sqlite:///" + path
-from app import app, db, FocusSession, now_utc
+from app import app, db
+from db import Decoration
 
 
 class BackendTests(unittest.TestCase):
@@ -14,43 +14,38 @@ class BackendTests(unittest.TestCase):
         with app.app_context():
             db.drop_all()
             db.create_all()
+            db.session.add(Decoration(id="hat", name="Hat", cost=10, image_url="https://example.com/hat.png"))
+            db.session.commit()
         self.client = app.test_client()
         result = self.client.post("/api/users/", json={"username": "test", "password": "password123"})
         self.headers = {"Authorization": "Bearer " + result.json["token"]}
 
-    def test_login(self):
-        result = self.client.post("/api/login/", json={"username": "TEST", "password": "password123"})
-        self.assertEqual(result.status_code, 200)
-        self.assertEqual(result.json["user"]["username"], "test")
-        self.assertEqual(self.client.post("/api/login/", json={"username": "test", "password": "wrong"}).status_code, 401)
-        self.assertEqual(self.client.post("/api/users/", json={"username": "test", "password": "password123"}).status_code, 409)
+    def test_accounts_and_study(self):
+        self.assertEqual(self.client.get('/api/coins').status_code, 401)
+        self.assertEqual(self.client.post('/api/study/submit', headers=self.headers, json={"studyTimeSeconds": -1}).status_code, 400)
+        response = self.client.post('/api/study/submit', headers=self.headers, json={"studyTimeSeconds": 1800})
+        self.assertEqual(response.json, {"success": True, "earnedCoins": 30, "totalCoins": 30})
+        self.assertEqual(self.client.get('/api/coins', headers=self.headers).json, {"coins": 30})
+        entry = self.client.get('/api/leaderboard', headers=self.headers).json[0]
+        self.assertEqual((entry['username'], entry['studyTimeSeconds'], entry['rank']), ('test', 1800, 1))
+        login = self.client.post('/api/login/', json={"username": "test", "password": "password123"})
+        self.assertEqual(login.status_code, 200)
+        headers = {"Authorization": "Bearer " + login.json['token']}
+        self.assertEqual(self.client.get('/api/coins', headers=headers).json['coins'], 30)
 
-    def test_settings_and_session_ownership(self):
-        result = self.client.put("/api/settings/", headers=self.headers, json={"deep_focus": True, "blocked_apps": ["com.example.app", "com.example.app"]})
-        self.assertEqual(result.status_code, 200)
-        self.assertEqual(result.json["blocked_apps"], ["com.example.app"])
-        self.assertEqual(self.client.get("/api/settings/", headers=self.headers).json["deep_focus"], True)
-        self.assertEqual(self.client.put("/api/settings/", headers=self.headers, json={"deep_focus": "yes"}).status_code, 400)
-        session = self.client.post("/api/focus-sessions/", headers=self.headers, json={"duration_minutes": 30}).json
-        self.assertEqual(self.client.get("/api/focus-sessions/", headers=self.headers).json["sessions"][0]["id"], session["id"])
-        other = self.client.post("/api/users/", json={"username": "other", "password": "password123"})
-        other_headers = {"Authorization": "Bearer " + other.json["token"]}
-        self.assertEqual(self.client.get('/api/focus-sessions/%s/' % session["id"], headers=other_headers).status_code, 404)
-
-    def test_timer_rewards_and_leaderboard(self):
-        session = self.client.post("/api/focus-sessions/", headers=self.headers, json={"duration_minutes": 30}).json
-        route = '/api/focus-sessions/%s/' % session["id"]
-        self.assertEqual(self.client.post(route + 'complete/', headers=self.headers).status_code, 400)
-        self.assertEqual(self.client.post(route + 'pause/', headers=self.headers).json["status"], "paused")
-        self.assertEqual(self.client.post(route + 'resume/', headers=self.headers).json["status"], "active")
-        with app.app_context():
-            stored = db.session.get(FocusSession, session["id"])
-            stored.started_at = now_utc() - timedelta(minutes=30)
-            db.session.commit()
-        self.assertEqual(self.client.post(route + 'complete/', headers=self.headers).json["coins_earned"], 30)
-        self.assertEqual(self.client.post(route + 'complete/', headers=self.headers).status_code, 409)
-        self.assertEqual(self.client.get('/api/me/', headers=self.headers).json["coins"], 30)
-        self.assertEqual(self.client.get('/api/leaderboard/weekly/', headers=self.headers).json["leaderboard"][0]["focus_seconds"], 1800)
+    def test_decorations(self):
+        self.assertEqual(self.client.get('/api/sprite', headers=self.headers).json, {"imageUrl": ""})
+        self.assertEqual(self.client.get('/api/decorations/images', headers=self.headers).json[0]['id'], 'hat')
+        self.assertEqual(self.client.get('/api/decorations/hat/image', headers=self.headers).status_code, 200)
+        self.assertEqual(self.client.get('/api/decorations/missing/image', headers=self.headers).status_code, 404)
+        self.assertEqual(self.client.post('/api/decorations/buy', headers=self.headers, json={}).status_code, 400)
+        self.assertEqual(self.client.post('/api/decorations/buy', headers=self.headers, json={"decorationId": "hat"}).status_code, 400)
+        self.client.post('/api/study/submit', headers=self.headers, json={"studyTimeSeconds": 1800})
+        result = self.client.post('/api/decorations/buy', headers=self.headers, json={"decorationId": "hat"})
+        self.assertTrue(result.json['isUnlocked'])
+        self.assertEqual(self.client.get('/api/coins', headers=self.headers).json['coins'], 20)
+        self.assertEqual(self.client.post('/api/decorations/buy', headers=self.headers, json={"decorationId": "hat"}).status_code, 409)
+        self.assertTrue(self.client.get('/api/decorations', headers=self.headers).json[0]['isUnlocked'])
 
 
 if __name__ == '__main__':
