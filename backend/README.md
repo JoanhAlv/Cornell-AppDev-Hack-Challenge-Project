@@ -1,6 +1,6 @@
 # TouchDown backend
 
-A starting Flask API for the focus app shown in the design. It follows the PA4 structure: routes in `app.py`, database models in `db.py`, and a local SQLite database.
+A Flask and SQLite backend for the Kotlin app. Routes live in `app.py` and models in `db.py`.
 
 ## Run locally
 
@@ -11,67 +11,40 @@ pip install -r requirements.txt
 python app.py
 ```
 
-The API runs at `http://localhost:8000`. SQLite data is created in `instance/touchdown.db`. Set `DATABASE_URL` to override the database location. The built-in debug server is for local development only.
+The server runs on port 8000. SQLite is created at `instance/touchdown.db`; `DATABASE_URL` overrides it. The development server is not intended for production.
 
-## API for the Kotlin team
+## Accounts
 
-Send JSON with `Content-Type: application/json`. After signup or login, save the returned token securely and send `Authorization: Bearer <token>` with all protected requests. Logging in again replaces the previous token.
+Create an account with `POST /api/users/` or sign in with `POST /api/login/`, both with `{"username":"jo","password":"password123"}`. The password must have at least eight characters. Both return `{"userId":"1","username":"jo","token":"..."}`. Save the token securely on the device, and send `Authorization: Bearer <token>` on every route below. `POST /api/logout/` invalidates it. Signing in again replaces the old token. Usernames are case-insensitive. The Kotlin interface in the screenshot does not show these account calls or an authorization header; the frontend must add them to save each person's stats.
 
-| Method | Route | JSON body / behavior |
+## Kotlin API
+
+The following paths intentionally have no trailing slash, matching the Retrofit interface. Requests and responses are JSON and use the exact camelCase field names shown by the frontend.
+
+| Method | Path | Response or body |
 | --- | --- | --- |
-| POST | `/api/users/` | `{"username":"jo", "password":"password123"}`; returns user and token |
-| POST | `/api/login/` | `{"username":"jo", "password":"password123"}`; returns user and token |
-| POST | `/api/logout/` | Invalidates the current token |
-| GET | `/api/me/` | Current profile and coin balance |
-| POST | `/api/focus-sessions/` | `{"duration_minutes":30}`; starts a session, 1–180 minutes |
-| GET | `/api/focus-sessions/<id>/` | Session status and remaining seconds |
-| POST | `/api/focus-sessions/<id>/pause/` | Pauses the timer |
-| POST | `/api/focus-sessions/<id>/resume/` | Resumes the timer |
-| POST | `/api/focus-sessions/<id>/complete/` | Completes a finished timer and awards coins once |
-| POST | `/api/focus-sessions/<id>/cancel/` | Cancels without a reward |
-| GET | `/api/leaderboard/weekly/` | All users with completed sessions this UTC week, ranked by focus seconds; also returns the current user's daily seconds starting Monday |
+| GET | `/api/coins` | `{"coins":30}` |
+| GET | `/api/leaderboard` | `[{"userId":"1","username":"jo","studyTimeSeconds":1800,"rank":1}]` |
+| POST | `/api/study/submit` | Body `{"studyTimeSeconds":1800}`; response `{"success":true,"earnedCoins":30,"totalCoins":30}` |
+| GET | `/api/sprite` | `{"imageUrl":""}` |
+| GET | `/api/decorations` | Array of `{"id":"hat","name":"Hat","cost":10,"isUnlocked":false,"imageUrl":""}` |
+| GET | `/api/decorations/images` | Array of `{"id":"hat","imageUrl":""}` |
+| GET | `/api/decorations/{id}/image` | `{"id":"hat","imageUrl":""}`, or 404 |
+| POST | `/api/decorations/buy` | Body `{"decorationId":"hat"}`; returns the purchased Decoration with `isUnlocked: true` |
 
-Errors are JSON objects with an `error` field. A user can have one active or paused session at a time. The client should call complete when the timer reaches zero; merely reaching zero does not award coins automatically.
+The screenshot's `buyDecoration()` method has no argument, so it must be updated to accept a JSON request body with `decorationId`. Errors return `{"error":"..."}` with a non-2xx HTTP status. The frontend should handle these errors.
 
-## Decisions to confirm with the team
-
-- The picture shows 30 coins for a 30-minute session, so this prototype awards one coin per completed minute.
-- The leaderboard currently includes all users, not just friends. Weeks run Monday–Sunday in UTC, and sessions count on their completion day.
-- Accounts use a username and password; no school email or NetID is required. Passwords are hashed; tokens do not expire and a new login invalidates the previous token. Production use needs a reviewed authentication and deployment design.
-- Blocking other apps and requesting device permissions are handled by the mobile app and operating system, not these routes.
-- A paused session can be resumed or cancelled. Rewards are granted only when the client requests completion after the server timer reaches zero.
-
-## Database design
-
-The database uses four tables. Primary keys identify each record; foreign keys connect data to its owner:
+## Database and API design
 
 ```text
-User 1 ───── many FocusSession
-User 1 ───── 0 or 1 UserSettings
-User 1 ───── many BlockedApp
+User 1 ─── many FocusSession
+User 1 ─── many Purchase ─── 1 Decoration
 ```
 
-- **User** stores the account name, normalized username, password hash, token hash, and coin balance. Passwords and tokens are not returned in profiles.
-- **FocusSession** belongs to one user and records the intended duration, elapsed time, running/paused/completed/cancelled state, completion time, and earned coins. The server computes remaining time from timestamps. Completed sessions supply the leaderboard and weekly chart.
-- **UserSettings** belongs to one user and stores the default timer length and deep-focus preference. Defaults are created on first access.
-- **BlockedApp** belongs to one user and stores an app identifier. A user cannot have the same identifier twice. These records are preferences for the mobile client; they do not block an app by themselves.
+A **User** stores a username, password hash, token hash, and coin balance. **FocusSession** stores each submitted study duration, its owner, completion time, and earned coins; old completed sessions are retained. **Decoration** stores an item's ID, name, cost, and image URL. **Purchase** joins a user and decoration, with a composite primary key to prevent duplicate ownership. The API calculates the leaderboard by summing completed study time per user and checks purchases against the user's balance and ownership.
 
-SQLAlchemy relationships in `db.py` connect the models in both directions. Deleting a user through SQLAlchemy also deletes their related records. `db.create_all()` creates missing tables but is not a migration system: future changes to existing columns will need a database migration.
+The backend awards one coin per full minute submitted. The current leaderboard is **all-time** and includes users with recorded study time, sorted by duration, with user ID breaking ties. These are assumptions for the team to confirm. Study time is reported by the client; the server cannot independently verify that a user studied. Repeated submissions each add time and coins, so the client should submit only once per session. Production use would need a trusted verification and retry/idempotency design.
 
-## API design
+The decoration catalog starts empty because no item names, prices, or assets were supplied. Add rows to `Decoration` when your team provides them; image URLs can be empty until images are hosted. Set `SPRITE_IMAGE_URL` to a hosted sprite URL (otherwise the response is empty). The API doesn't host or create image files.
 
-Routes represent accounts, the signed-in user's settings, focus sessions, and the weekly leaderboard. The server authenticates requests using a bearer token and checks that a session belongs to the requesting user. The client controls the display and device-specific permissions, while the server tracks session time, calculates rewards, and aggregates completed sessions. Responses are JSON with HTTP status codes; errors contain an `error` message.
-
-Additional routes for the screens:
-
-| Method | Route | JSON body / behavior |
-| --- | --- | --- |
-| GET | `/api/settings/` | Returns `default_duration_minutes`, `deep_focus`, and `blocked_apps` |
-| PUT | `/api/settings/` | Update any of those fields, e.g. `{"deep_focus":true,"blocked_apps":["com.example.app"]}`. The app list replaces the previous list. |
-| GET | `/api/focus-sessions/` | Returns the user's sessions, newest first, including active and paused sessions for restoring the timer |
-
-The identifiers in `blocked_apps` must be agreed with the Kotlin developer and are platform-specific. Settings do not prove a device has granted permissions or that blocking is active. Deep focus is saved as a preference; its exact device behavior needs agreement with the team.
-
-The global leaderboard is a prototype; a friends-only leaderboard would need agreed product rules. Username/password login is available to anyone. This is a development backend, not a production-ready authentication or deployment system.
-
-For compatibility with the first prototype database, the username is stored in the existing database column named `email`. Existing accounts can log in using their former email as their username; new accounts do not need an email address.
+Old timer, settings, and app-blocking routes were removed to match the frontend interface. Existing SQLite tables are not deleted, and the original `email` column stores usernames for compatibility. `db.create_all()` does not migrate existing columns; future schema changes need a migration. Existing active or paused sessions are no longer controlled by this API. The account system is a prototype: tokens do not expire, and production deployment requires further security review.
