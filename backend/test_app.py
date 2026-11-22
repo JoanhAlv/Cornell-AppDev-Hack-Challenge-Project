@@ -15,8 +15,15 @@ class BackendTests(unittest.TestCase):
             db.drop_all()
             db.create_all()
         self.client = app.test_client()
-        result = self.client.post("/api/users/", json={"name": "Test", "email": "test@example.edu", "password": "password123"})
+        result = self.client.post("/api/users/", json={"username": "test", "password": "password123"})
         self.headers = {"Authorization": "Bearer " + result.json["token"]}
+
+    def test_login(self):
+        result = self.client.post("/api/login/", json={"username": "TEST", "password": "password123"})
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.json["user"]["username"], "test")
+        self.assertEqual(self.client.post("/api/login/", json={"username": "test", "password": "wrong"}).status_code, 401)
+        self.assertEqual(self.client.post("/api/users/", json={"username": "test", "password": "password123"}).status_code, 409)
 
     def test_settings_and_session_ownership(self):
         result = self.client.put("/api/settings/", headers=self.headers, json={"deep_focus": True, "blocked_apps": ["com.example.app", "com.example.app"]})
@@ -26,7 +33,7 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(self.client.put("/api/settings/", headers=self.headers, json={"deep_focus": "yes"}).status_code, 400)
         session = self.client.post("/api/focus-sessions/", headers=self.headers, json={"duration_minutes": 30}).json
         self.assertEqual(self.client.get("/api/focus-sessions/", headers=self.headers).json["sessions"][0]["id"], session["id"])
-        other = self.client.post("/api/users/", json={"name": "Other", "email": "other@example.edu", "password": "password123"})
+        other = self.client.post("/api/users/", json={"username": "other", "password": "password123"})
         other_headers = {"Authorization": "Bearer " + other.json["token"]}
         self.assertEqual(self.client.get('/api/focus-sessions/%s/' % session["id"], headers=other_headers).status_code, 404)
 
