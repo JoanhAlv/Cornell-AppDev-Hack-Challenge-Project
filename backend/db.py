@@ -6,7 +6,7 @@ db = SQLAlchemy()
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
-    email = db.Column(db.String(255), unique=True, nullable=False)
+    username = db.Column("email", db.String(255), unique=True, nullable=False)
     password_hash = db.Column(db.String(255), nullable=False)
     token_hash = db.Column(db.String(64), unique=True)
     coins = db.Column(db.Integer, nullable=False, default=0)
@@ -16,7 +16,7 @@ class User(db.Model):
     blocked_apps = db.relationship("BlockedApp", back_populates="user", cascade="all, delete-orphan")
 
     def serialize(self):
-        return {"id": self.id, "name": self.name, "email": self.email, "coins": self.coins}
+        return {"id": self.id, "name": self.name, "username": self.username, "coins": self.coins}
 
 
 class FocusSession(db.Model):
