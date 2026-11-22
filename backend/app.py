@@ -54,17 +54,15 @@ def issue_token(user):
 @app.route("/api/users/", methods=["POST"])
 def create_user():
     body = body_json()
-    name, email, password = body.get("name"), body.get("email"), body.get("password")
-    if not all(isinstance(value, str) and value.strip() for value in (name, email, password)):
-        return jsonify({"error": "Name, email, and password are required"}), 400
-    if len(password) < 8:
-        return jsonify({"error": "Password must be at least 8 characters"}), 400
-    email = email.strip().lower()
-    if len(name.strip()) > 100 or len(email) > 255 or "@" not in email:
-        return jsonify({"error": "Invalid name or email"}), 400
-    if User.query.filter_by(email=email).first():
-        return jsonify({"error": "Email already registered"}), 409
-    user = User(name=name.strip(), email=email, password_hash=generate_password_hash(password))
+    username, password = body.get("username"), body.get("password")
+    if not isinstance(username, str) or not username.strip() or not isinstance(password, str) or len(password) < 8:
+        return jsonify({"error": "Username and a password of at least 8 characters are required"}), 400
+    username = username.strip().lower()
+    if len(username) > 100:
+        return jsonify({"error": "Username must be 100 characters or fewer"}), 400
+    if User.query.filter_by(username=username).first():
+        return jsonify({"error": "Username already registered"}), 409
+    user = User(name=username, username=username, password_hash=generate_password_hash(password))
     db.session.add(user)
     db.session.commit()
     return jsonify({"user": user.serialize(), "token": issue_token(user)}), 201
@@ -74,12 +72,12 @@ def create_user():
 @app.route("/api/login/", methods=["POST"])
 def login():
     body = body_json()
-    email, password = body.get("email"), body.get("password")
-    if not isinstance(email, str) or not isinstance(password, str):
-        return jsonify({"error": "Invalid email or password"}), 401
-    user = User.query.filter_by(email=email.strip().lower()).first()
+    username, password = body.get("username"), body.get("password")
+    if not isinstance(username, str) or not isinstance(password, str):
+        return jsonify({"error": "Invalid username or password"}), 401
+    user = User.query.filter_by(username=username.strip().lower()).first()
     if user is None or not check_password_hash(user.password_hash, password):
-        return jsonify({"error": "Invalid email or password"}), 401
+        return jsonify({"error": "Invalid username or password"}), 401
     return jsonify({"user": user.serialize(), "token": issue_token(user)}), 200
 
 
