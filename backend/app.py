@@ -118,6 +118,46 @@ def leaderboard(user):
                     for index, (uid, username, seconds) in enumerate(ranking)]), 200
 
 
+# USER STATS AND USERNAME
+
+def user_stats(user):
+    totals = db.session.query(User.id, db.func.sum(FocusSession.duration_seconds)).join(
+        FocusSession, FocusSession.user_id == User.id
+    ).filter(FocusSession.status == "completed").group_by(User.id).all()
+    ranking = sorted(totals, key=lambda row: (-row[1], row[0]))
+    seconds = 0
+    rank = 0
+    for index, (user_id, total) in enumerate(ranking):
+        if user_id == user.id:
+            seconds = int(total)
+            rank = index + 1
+            break
+    return {"userId": str(user.id), "username": user.username,
+            "studyTimeSeconds": seconds, "rank": rank}
+
+
+@app.route("/api/user/stats", methods=["GET"])
+@require_user
+def get_user_stats(user):
+    return jsonify(user_stats(user)), 200
+
+
+@app.route("/api/user/username", methods=["POST"])
+@require_user
+def update_username(user):
+    username = body_json().get("username")
+    if not isinstance(username, str) or not username.strip() or len(username.strip()) > 100:
+        return jsonify({"error": "Username must be 1 to 100 characters"}), 400
+    username = username.strip().lower()
+    existing = User.query.filter_by(username=username).first()
+    if existing is not None and existing.id != user.id:
+        return jsonify({"error": "Username already registered"}), 409
+    user.username = username
+    user.name = username
+    db.session.commit()
+    return jsonify(user_stats(user)), 200
+
+
 # SPRITE AND DECORATIONS
 @app.route("/api/sprite", methods=["GET"])
 @require_user
