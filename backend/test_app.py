@@ -33,6 +33,18 @@ class BackendTests(unittest.TestCase):
         headers = {"Authorization": "Bearer " + login.json['token']}
         self.assertEqual(self.client.get('/api/coins', headers=headers).json['coins'], 30)
 
+    def test_user_stats_and_username(self):
+        self.assertEqual(self.client.get('/api/user/stats').status_code, 401)
+        stats = self.client.get('/api/user/stats', headers=self.headers).json
+        self.assertEqual((stats['studyTimeSeconds'], stats['rank']), (0, 0))
+        self.client.post('/api/study/submit', headers=self.headers, json={"studyTimeSeconds": 1800})
+        result = self.client.post('/api/user/username', headers=self.headers, json={"username": "New Name"})
+        self.assertEqual(result.json, {"userId": stats['userId'], "username": "new name", "studyTimeSeconds": 1800, "rank": 1})
+        self.assertEqual(self.client.post('/api/user/username', headers=self.headers, json={"username": " "}).status_code, 400)
+        self.client.post('/api/users/', json={"username": "other", "password": "password123"})
+        self.assertEqual(self.client.post('/api/user/username', headers=self.headers, json={"username": "other"}).status_code, 409)
+        self.assertEqual(self.client.post('/api/login/', json={"username": "new name", "password": "password123"}).status_code, 200)
+
     def test_decorations(self):
         self.assertEqual(self.client.get('/api/sprite', headers=self.headers).json, {"imageUrl": ""})
         self.assertEqual(self.client.get('/api/decorations/images', headers=self.headers).json[0]['id'], 'hat')
