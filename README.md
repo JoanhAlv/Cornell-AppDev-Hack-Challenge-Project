@@ -1,1 +1,1 @@
-# Cornell-AppDev-Hack-Challenge-Project
+# Cornell AppDev Hack Challenge Project
