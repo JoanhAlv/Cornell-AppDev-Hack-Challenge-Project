@@ -26,6 +26,8 @@ The following paths intentionally have no trailing slash, matching the Retrofit 
 | GET | `/api/coins` | `{"coins":30}` |
 | GET | `/api/leaderboard` | `[{"userId":"1","username":"jo","studyTimeSeconds":1800,"rank":1}]` |
 | POST | `/api/study/submit` | Body `{"studyTimeSeconds":1800}`; response `{"success":true,"earnedCoins":30,"totalCoins":30}` |
+| GET | `/api/user/stats` | `{"userId":"1","username":"jo","studyTimeSeconds":1800,"rank":1}` |
+| POST | `/api/user/username` | Body `{"username":"newname"}`; returns updated user stats |
 | GET | `/api/sprite` | `{"imageUrl":""}` |
 | GET | `/api/decorations` | Array of `{"id":"hat","name":"Hat","cost":10,"isUnlocked":false,"imageUrl":""}` |
 | GET | `/api/decorations/images` | Array of `{"id":"hat","imageUrl":""}` |
@@ -43,8 +45,10 @@ User 1 ─── many Purchase ─── 1 Decoration
 
 A **User** stores a username, password hash, token hash, and coin balance. **FocusSession** stores each submitted study duration, its owner, completion time, and earned coins; old completed sessions are retained. **Decoration** stores an item's ID, name, cost, and image URL. **Purchase** joins a user and decoration, with a composite primary key to prevent duplicate ownership. The API calculates the leaderboard by summing completed study time per user and checks purchases against the user's balance and ownership.
 
-The backend awards one coin per full minute submitted. The current leaderboard is **all-time** and includes users with recorded study time, sorted by duration, with user ID breaking ties. These are assumptions for the team to confirm. Study time is reported by the client; the server cannot independently verify that a user studied. Repeated submissions each add time and coins, so the client should submit only once per session. Production use would need a trusted verification and retry/idempotency design.
+The backend awards one coin per full minute submitted. The current leaderboard is **all-time** and includes users with recorded study time, sorted by duration, with user ID breaking ties. A user with no completed study time has rank `0` until they appear on the leaderboard. These are assumptions for the team to confirm. Study time is reported by the client; the server cannot independently verify that a user studied. Repeated submissions each add time and coins, so the client should submit only once per session. Production use would need a trusted verification and retry/idempotency design.
 
 The decoration catalog starts empty because no item names, prices, or assets were supplied. Add rows to `Decoration` when your team provides them; image URLs can be empty until images are hosted. Set `SPRITE_IMAGE_URL` to a hosted sprite URL (otherwise the response is empty). The API doesn't host or create image files.
 
 Old timer, settings, and app-blocking routes were removed to match the frontend interface. Existing SQLite tables are not deleted, and the original `email` column stores usernames for compatibility. `db.create_all()` does not migrate existing columns; future schema changes need a migration. Existing active or paused sessions are no longer controlled by this API. The account system is a prototype: tokens do not expire, and production deployment requires further security review.
+
+Changing a username also changes the username used to sign in. Usernames are normalized to lowercase and must be unique.
